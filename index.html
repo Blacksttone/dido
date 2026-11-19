@@ -2,99 +2,135 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Dido — Free AI Chat</title>
-<meta name="description" content="Dido is a free AI chat assistant. The model runs in your browser — no account, no subscription, no API key.">
+<meta name="description" content="Dido is a free AI chat assistant. The AI runs on your own device: no login, no subscription, no API key.">
+<meta name="theme-color" content="#6d4aff">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Dido">
+<meta property="og:title" content="Dido — Free AI Chat">
+<meta property="og:description" content="Free AI chat that runs on your device. No login, no subscription.">
 <style>
   :root {
     --bg: #f7f7f8; --panel: #ffffff; --side: #ececf1; --text: #1f2328; --muted: #6b7280;
-    --border: #d9dce1; --accent: #6d4aff; --accent-text: #fff; --user: #e8e3ff; --code: #f1f2f4;
+    --border: #d9dce1; --accent: #6d4aff; --accent-text: #fff; --user: #e8e3ff; --code: #f1f2f4; --warn: #b42318;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #17181c; --panel: #1f2026; --side: #121317; --text: #e8e9ec; --muted: #9aa0aa;
-      --border: #30323a; --accent: #8b6cff; --accent-text: #fff; --user: #2c2645; --code: #2a2c33;
+      --border: #30323a; --accent: #8b6cff; --accent-text: #fff; --user: #2c2645; --code: #2a2c33; --warn: #ff8a80;
     }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
     font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   button, select, textarea { font: inherit; color: inherit; }
-  .app { display: flex; height: 100%; }
-  aside { width: 260px; background: var(--side); border-right: 1px solid var(--border);
+  .app { display: flex; height: 100%; height: 100dvh; }
+  aside { width: 270px; flex-shrink: 0; background: var(--side); border-right: 1px solid var(--border);
     display: flex; flex-direction: column; padding: 12px; gap: 10px; }
   .brand { font-weight: 700; font-size: 20px; display: flex; align-items: center; gap: 8px; }
-  .brand span { background: var(--accent); color: var(--accent-text); border-radius: 8px;
-    width: 30px; height: 30px; display: grid; place-items: center; }
+  .brand img { width: 30px; height: 30px; }
   .btn { border: 1px solid var(--border); background: var(--panel); border-radius: 10px;
     padding: 9px 12px; cursor: pointer; text-align: left; }
   .btn:hover { border-color: var(--accent); }
   .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); text-align: center; }
-  .chats { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .btn.link { border: 0; background: none; padding: 2px; color: var(--muted); font-size: 13px; }
+  .btn.link:hover { color: var(--text); }
+  .chats { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
   .chat-item { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
   .chat-item:hover, .chat-item.active { background: var(--panel); }
   .chat-item .t { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .chat-item .x { opacity: .5; border: 0; background: none; cursor: pointer; }
+  .chat-item .x { opacity: .5; border: 0; background: none; cursor: pointer; padding: 2px 4px; }
   .chat-item .x:hover { opacity: 1; }
-  label.small { font-size: 12px; color: var(--muted); }
+  label.small { display: block; margin-bottom: 4px; font-size: 12px; color: var(--muted); }
   select { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); }
+  select:disabled { opacity: .6; }
   .free { font-size: 12px; color: var(--muted); }
   main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  header { display: none; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  header { display: none; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  header b { flex: 1; font-size: 17px; }
   #messages { flex: 1; overflow-y: auto; padding: 24px 16px; }
   .wrap { max-width: 780px; margin: 0 auto; }
-  .msg { margin: 0 0 18px; display: flex; }
-  .msg.user { justify-content: flex-end; }
-  .bubble { max-width: 100%; padding: 10px 14px; border-radius: 14px; overflow-wrap: anywhere; }
-  .msg.user .bubble { background: var(--user); max-width: 85%; white-space: pre-wrap; }
-  .msg.assistant .bubble { background: transparent; padding-left: 0; }
+  .msg { margin: 0 0 18px; display: flex; flex-direction: column; align-items: flex-start; }
+  .msg.user { align-items: flex-end; }
+  .bubble { max-width: 100%; overflow-wrap: anywhere; }
+  .msg.user .bubble { background: var(--user); max-width: 85%; padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; }
+  .msg.error .bubble { color: var(--warn); }
   .bubble pre { background: var(--code); padding: 12px; border-radius: 8px; overflow-x: auto; }
   .bubble code { background: var(--code); padding: 1px 5px; border-radius: 5px; font-size: 13.5px; }
   .bubble pre code { padding: 0; background: none; }
   .bubble p:first-child { margin-top: 0; } .bubble p:last-child { margin-bottom: 0; }
-  .empty { text-align: center; margin-top: 12vh; color: var(--muted); }
-  .empty h1 { color: var(--text); font-size: 30px; margin: 0 0 8px; }
+  .bubble table { border-collapse: collapse; }
+  .bubble th, .bubble td { border: 1px solid var(--border); padding: 4px 8px; }
+  .typing:empty::after, .typing > :last-child::after { content: "▍"; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .meta { display: flex; gap: 12px; align-items: center; margin-top: 4px; font-size: 12px; color: var(--muted); }
+  .meta button { border: 0; background: none; padding: 2px 0; color: var(--muted); cursor: pointer; font-size: 12px; }
+  .meta button:hover { color: var(--text); }
+  .empty { text-align: center; margin-top: 9vh; color: var(--muted); }
+  .empty img { width: 64px; height: 64px; }
+  .empty h1 { color: var(--text); font-size: 28px; margin: 12px 0 6px; }
   .suggest { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 24px; }
-  #status { max-width: 780px; margin: 0 auto 8px; font-size: 13px; color: var(--muted); padding: 0 16px; }
+  #status { width: 100%; max-width: 812px; margin: 0 auto; padding: 0 16px 8px; font-size: 13px; color: var(--muted); }
+  #status:empty { display: none; }
   .bar { height: 4px; background: var(--border); border-radius: 4px; overflow: hidden; margin-top: 4px; }
   .bar div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
-  form { padding: 0 16px 16px; }
+  form { padding: 0 16px max(12px, env(safe-area-inset-bottom)); }
   .composer { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end;
     background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 8px; }
-  textarea { flex: 1; resize: none; border: 0; outline: none; background: transparent; max-height: 200px; padding: 6px; }
-  #send { border: 0; background: var(--accent); color: var(--accent-text); border-radius: 10px; padding: 8px 14px; cursor: pointer; }
-  #send:disabled { opacity: .5; cursor: default; }
+  .composer:focus-within { border-color: var(--accent); }
+  textarea { flex: 1; resize: none; border: 0; outline: none; background: transparent; max-height: 200px;
+    padding: 6px; font-size: 16px; line-height: 1.4; }
+  #send { min-width: 70px; border: 0; background: var(--accent); color: var(--accent-text); border-radius: 10px;
+    padding: 8px 16px; cursor: pointer; }
+  #send.stop { background: var(--text); color: var(--bg); }
   .note { text-align: center; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .backdrop { display: none; }
   @media (max-width: 760px) {
-    aside { position: fixed; inset: 0 auto 0 0; z-index: 10; transform: translateX(-100%); transition: transform .2s; }
+    aside { position: fixed; inset: 0 auto 0 0; z-index: 10; width: min(85vw, 300px);
+      transform: translateX(-100%); transition: transform .2s; }
     aside.open { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.3); }
+    aside.open + .backdrop { display: block; position: fixed; inset: 0; z-index: 9; background: rgba(0,0,0,.35); }
     header { display: flex; }
+    #messages { padding: 16px 12px; }
+    form { padding-left: 10px; padding-right: 10px; }
   }
 </style>
 </head>
 <body>
 <div class="app">
   <aside id="side">
-    <div class="brand"><span>D</span> Dido</div>
+    <div class="brand"><img src="icon.svg" alt=""> Dido</div>
     <button class="btn primary" id="newChat">+ New chat</button>
     <div class="chats" id="chats"></div>
     <div>
-      <label class="small" for="model">Model (runs on your device)</label>
+      <label class="small" for="model">AI model (runs on your device)</label>
       <select id="model"></select>
+      <div class="free" id="modelHint" style="margin-top:4px"></div>
     </div>
-    <button class="btn" id="clearAll">Delete all chats</button>
-    <div class="free">100% free · no login · no subscription. Your chats stay in this browser.</div>
+    <button class="btn link" id="clearAll">🗑 Delete all chats</button>
+    <button class="btn link" id="clearModels">💾 Free up space (delete downloaded models)</button>
+    <div class="free">100% free · no login · no subscription. Your chats never leave this device.</div>
   </aside>
+  <div class="backdrop" id="backdrop"></div>
   <main>
-    <header><button class="btn" id="menu" aria-label="Menu">☰</button><b>Dido</b></header>
+    <header>
+      <button class="btn" id="menu" aria-label="Open menu">☰</button>
+      <b>Dido</b>
+      <button class="btn" id="newChat2" aria-label="New chat">+</button>
+    </header>
     <div id="messages"><div class="wrap" id="list"></div></div>
-    <div id="status"></div>
+    <div id="status" aria-live="polite"></div>
     <form id="form">
       <div class="composer">
-        <textarea id="input" rows="1" placeholder="Message Dido…"></textarea>
+        <textarea id="input" rows="1" placeholder="Message Dido…" aria-label="Message"></textarea>
         <button id="send" type="submit">Send</button>
       </div>
-      <div class="note">The first message downloads the model once (cached afterwards). Needs a browser with WebGPU (Chrome / Edge).</div>
+      <div class="note">Your first message downloads the AI model once; after that it's saved on your device. Works best in Chrome or Edge.</div>
     </form>
   </main>
 </div>
@@ -102,16 +138,27 @@
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script type="module">
-import * as webllm from "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm";
-
-const MODELS = [
-  ["Qwen2.5-1.5B-Instruct-q4f16_1-MLC", "Qwen 2.5 1.5B — fast (≈1 GB)"],
-  ["Llama-3.2-1B-Instruct-q4f16_1-MLC", "Llama 3.2 1B — fastest (≈0.9 GB)"],
-  ["Llama-3.2-3B-Instruct-q4f16_1-MLC", "Llama 3.2 3B — smarter (≈2.3 GB)"],
-  ["Phi-3.5-mini-instruct-q4f16_1-MLC", "Phi 3.5 mini — smart (≈3.7 GB)"],
-  ["Qwen2.5-7B-Instruct-q4f16_1-MLC", "Qwen 2.5 7B — best (≈5 GB)"],
+// The AI engine (WebLLM) is loaded on demand, so the app still opens even if the CDN is slow or down.
+const WEBLLM_URLS = [
+  "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/lib/index.js",
+  "https://unpkg.com/@mlc-ai/web-llm@0.2.79/lib/index.js",
 ];
-const SYSTEM = "You are Dido, a friendly and helpful AI assistant. Answer clearly and concisely. Use markdown when helpful.";
+// [model id, label, hint]. Sizes are the GPU memory each model needs.
+const MODELS = [
+  ["Qwen2.5-1.5B-Instruct-q4f16_1-MLC", "Qwen 2.5 1.5B · 1.6 GB", "Balanced: quick and fairly smart."],
+  ["Llama-3.2-1B-Instruct-q4f16_1-MLC", "Llama 3.2 1B · 0.9 GB", "Fastest. Best for phones."],
+  ["Llama-3.2-3B-Instruct-q4f16_1-MLC", "Llama 3.2 3B · 2.3 GB", "Smarter, a little slower."],
+  ["Phi-3.5-mini-instruct-q4f16_1-MLC", "Phi 3.5 mini · 3.7 GB", "Smart. Needs a good graphics card."],
+  ["Qwen2.5-7B-Instruct-q4f16_1-MLC", "Qwen 2.5 7B · 5.1 GB", "Smartest. Needs a strong graphics card."],
+];
+const PHONE_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+const SYSTEM = "You are Dido, a friendly and helpful AI assistant. Answer clearly and concisely, and reply in the same language the user writes in. Use markdown when it helps.";
+// Every model has a 4096-token memory. Keep the history we send well under that so there's room to reply.
+const HISTORY_BUDGET = 2400;
+const NO_GPU = "Your browser can't run the AI yet (WebGPU isn't available here). Please open Dido in the latest **Chrome** or **Edge** on a computer or Android phone. iPhone and iPad need iOS 26 or newer.";
+
+const isPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
 const $ = id => document.getElementById(id);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
@@ -119,124 +166,353 @@ const store = {
 };
 
 let chats = store.get("dido.chats", []);
+if (!Array.isArray(chats)) chats = [];
+chats = chats.filter(c => c && Array.isArray(c.messages) && c.messages.length);
 let currentId = store.get("dido.current", null);
-let engine = null, loadedModel = null, busy = false;
+let busy = false, stopRequested = false, live = null;   // live = reply being streamed: { chatId, text, el }
+let lib = null, engine = null, engineModel = null, enginePromise = null, loadChain = Promise.resolve();
+let loading = 0, gpuInfo = null;
 
+// ---------- markdown ----------
+if (window.marked) marked.use({ gfm: true, breaks: true });
+if (window.DOMPurify) DOMPurify.addHook("afterSanitizeAttributes", n => {
+  if (n.tagName === "A") { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); }
+});
+const esc = s => s.replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+const md = t => window.marked && window.DOMPurify
+  ? DOMPurify.sanitize(marked.parse(t || "")) : esc(t || "").replace(/\n/g, "<br>");
+
+// ---------- model picker ----------
 const modelSel = $("model");
 for (const [id, label] of MODELS) modelSel.add(new Option(label, id));
-modelSel.value = store.get("dido.model", MODELS[0][0]);
-modelSel.onchange = () => store.set("dido.model", modelSel.value);
+modelSel.value = store.get("dido.model", isPhone ? PHONE_MODEL : MODELS[0][0]);
+if (!modelSel.value) modelSel.value = MODELS[0][0];
+const showHint = () => { $("modelHint").textContent = MODELS.find(m => m[0] === modelSel.value)?.[2] || ""; };
+showHint();
+modelSel.onchange = () => {
+  store.set("dido.model", modelSel.value);
+  showHint();
+  if (engine && engineModel !== modelSel.value) status("The new model will load when you send your next message.");
+  preloadIfCached();
+};
 
-const save = () => { store.set("dido.chats", chats); store.set("dido.current", currentId); };
-const current = () => chats.find(c => c.id === currentId);
-const md = t => DOMPurify.sanitize(marked.parse(t || ""));
-
-function newChat() {
-  const c = { id: Date.now().toString(36), title: "New chat", messages: [] };
-  chats.unshift(c); currentId = c.id; save(); render();
+// ---------- AI engine ----------
+async function loadLib() {
+  if (lib) return lib;
+  let lastErr;
+  for (const url of WEBLLM_URLS) {
+    try { return (lib = await import(url)); } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
 }
 
+async function checkGPU() {
+  if (gpuInfo) return gpuInfo;
+  const adapter = navigator.gpu &&
+    await navigator.gpu.requestAdapter({ powerPreference: "high-performance" }).catch(() => null);
+  if (!adapter) throw new Error(NO_GPU);
+  return (gpuInfo = { f16: adapter.features.has("shader-f16") });
+}
+
+// Some GPUs (many phones) can't do 16-bit math: use the 32-bit build of the same model there.
+const variant = id => gpuInfo && !gpuInfo.f16 ? id.replace("q4f16_1", "q4f32_1") : id;
+
+async function loadModel(want) {
+  loading++; updateControls();
+  try {
+    await checkGPU();
+    const webllm = await loadLib();
+    status("Loading AI model…", 0);
+    const id = variant(want);
+    const initProgressCallback = r => status(r.text, Math.round((r.progress || 0) * 100));
+    if (!engine) engine = await webllm.CreateMLCEngine(id, { initProgressCallback });
+    else await engine.reload(id);
+    store.set("dido.everLoaded", true);
+    navigator.storage?.persist?.().catch(() => {});   // ask the browser not to evict the saved model
+    status("");
+    return engine;
+  } finally { loading--; updateControls(); }
+}
+
+// Loads run one after another, never in parallel.
+function getEngine() {
+  const want = modelSel.value;
+  if (enginePromise && engineModel === want) return enginePromise;
+  engineModel = want;
+  const p = loadChain.then(() => loadModel(want));
+  loadChain = p.catch(() => {});
+  enginePromise = p;
+  p.catch(() => { if (enginePromise === p) { enginePromise = null; engineModel = null; } });
+  return p;
+}
+
+function resetEngine() {
+  const old = engine;
+  engine = null; engineModel = null; enginePromise = null;
+  try { old?.unload()?.catch?.(() => {}); } catch {}
+}
+
+// Returning visitors: if the chosen model is already saved on this device, get it ready right away.
+async function preloadIfCached() {
+  if (!navigator.gpu || busy || !store.get("dido.everLoaded", false)) return;
+  try {
+    await checkGPU();
+    const webllm = await loadLib();
+    const want = modelSel.value;
+    if (engineModel === want) return;
+    if (await webllm.hasModelInCache(variant(want))) await getEngine();
+  } catch (e) { console.warn("Preload skipped:", e); status(""); }
+}
+
+function friendlyError(err) {
+  const msg = String(err?.message || err);
+  const name = err?.name || "";
+  if (msg === NO_GPU) return msg;
+  if (name === "ContextWindowSizeExceededError" || /context window/i.test(msg))
+    return "This is too long for the AI's memory. Please send a shorter message or start a **New chat**.";
+  if (/dynamically imported module|Importing a module script failed/i.test(msg))
+    return "Couldn't load the AI engine. Check your internet connection and reload the page.";
+  if (name === "QuotaExceededError" || /quota/i.test(msg))
+    return "Not enough free storage on this device to save the model. Free up some space or pick a smaller model.";
+  if (/device.*lost|out of memory|OOM|allocat/i.test(msg)) {
+    resetEngine();
+    return "Your device ran out of memory for this model. Pick a smaller one (Llama 3.2 1B) in the menu and try again.";
+  }
+  if (/fetch|network|load failed/i.test(msg))
+    return "Couldn't download the AI model. Check your internet connection and try again.";
+  return msg;
+}
+
+// ---------- chats ----------
+const save = () => { store.set("dido.chats", chats); store.set("dido.current", currentId); };
+const current = () => chats.find(c => c.id === currentId);
+
+// A new chat is only saved once its first message is sent, so the list never fills with empty chats.
+function newChat() { currentId = null; save(); render(); }
+
+const estTokens = s => {
+  let ascii = 0, other = 0;
+  for (const ch of s) ch.charCodeAt(0) < 128 ? ascii++ : other++;
+  return Math.ceil(ascii / 3 + other * 1.5) + 8;
+};
+
+// The messages the model sees: newest first until the budget is used up; failed turns left out.
+function contextFor(c) {
+  const msgs = [];
+  c.messages.forEach((m, i) => {
+    if (m.error || (m.role === "user" && c.messages[i + 1]?.error)) return;
+    msgs.push({ role: m.role, content: m.content });
+  });
+  const out = [];
+  let used = 0;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    used += estTokens(msgs[i].content);
+    if (used > HISTORY_BUDGET && out.length) break;
+    out.unshift(msgs[i]);
+  }
+  while (out.length > 1 && out[0].role !== "user") out.shift();
+  return out;
+}
+
+// ---------- rendering ----------
+const closeSide = () => $("side").classList.remove("open");
+
 function renderSidebar() {
-  const box = $("chats"); box.innerHTML = "";
+  const box = $("chats");
+  box.innerHTML = "";
   for (const c of chats) {
     const el = document.createElement("div");
     el.className = "chat-item" + (c.id === currentId ? " active" : "");
-    const t = document.createElement("span"); t.className = "t"; t.textContent = c.title;
-    const x = document.createElement("button"); x.className = "x"; x.textContent = "✕"; x.title = "Delete";
-    x.onclick = e => { e.stopPropagation(); chats = chats.filter(k => k.id !== c.id);
-      if (currentId === c.id) currentId = chats[0]?.id ?? null; save(); render(); };
-    el.onclick = () => { currentId = c.id; save(); render(); $("side").classList.remove("open"); };
-    el.append(t, x); box.append(el);
+    const t = document.createElement("span");
+    t.className = "t"; t.textContent = c.title;
+    const x = document.createElement("button");
+    x.className = "x"; x.textContent = "✕"; x.title = "Delete chat"; x.setAttribute("aria-label", "Delete chat");
+    x.onclick = e => {
+      e.stopPropagation();
+      chats = chats.filter(k => k.id !== c.id);
+      if (currentId === c.id) currentId = chats[0]?.id ?? null;
+      save(); render();
+    };
+    el.onclick = () => { currentId = c.id; save(); render(); closeSide(); };
+    el.append(t, x);
+    box.append(el);
   }
 }
 
-function bubble(role, content) {
-  const m = document.createElement("div"); m.className = "msg " + role;
-  const b = document.createElement("div"); b.className = "bubble";
-  if (role === "user") b.textContent = content; else b.innerHTML = md(content);
-  m.append(b); $("list").append(m); return b;
+function addMsg(m) {
+  const el = document.createElement("div");
+  el.className = "msg " + m.role + (m.error ? " error" : "");
+  const b = document.createElement("div");
+  b.className = "bubble";
+  if (m.role === "user") b.textContent = m.content; else b.innerHTML = md(m.content);
+  el.append(b);
+  if (m.role === "assistant" && !m.error) {
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const copy = document.createElement("button");
+    copy.type = "button"; copy.textContent = "Copy";
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(m.content); copy.textContent = "Copied ✓"; }
+      catch { copy.textContent = "Couldn't copy"; }
+      setTimeout(() => { copy.textContent = "Copy"; }, 1500);
+    };
+    meta.append(copy);
+    if (m.note) { const n = document.createElement("span"); n.textContent = m.note; meta.append(n); }
+    el.append(meta);
+  }
+  $("list").append(el);
+}
+
+function addLive() {
+  const el = document.createElement("div");
+  el.className = "msg assistant";
+  const b = document.createElement("div");
+  b.className = "bubble typing";
+  b.innerHTML = live.text ? md(live.text) : "";
+  el.append(b);
+  $("list").append(el);
+  live.el = b;
+}
+
+function paintLive() {
+  if (!live?.el?.isConnected) return;
+  const stick = nearBottom();
+  live.el.innerHTML = md(live.text);
+  if (stick) scroll();
+}
+
+function renderEmpty() {
+  const list = $("list");
+  list.innerHTML = `<div class="empty"><img src="icon.svg" alt=""><h1>Hi, I'm Dido 👋</h1>
+    <div>Free AI chat that runs privately on your device.</div><div class="suggest"></div></div>`;
+  const box = list.querySelector(".suggest");
+  for (const q of ["Explain quantum computing simply", "Write a short poem about Chennai rain",
+                   "Help me plan a 3-day study schedule", "Write a Python function to reverse a string"]) {
+    const b = document.createElement("button");
+    b.className = "btn"; b.textContent = q;
+    b.onclick = () => { $("input").value = q; send(); };
+    box.append(b);
+  }
 }
 
 function renderMessages() {
-  const list = $("list"); list.innerHTML = "";
   const c = current();
-  if (!c || !c.messages.length) {
-    list.innerHTML = `<div class="empty"><h1>Hi, I'm Dido 👋</h1>
-      <div>Free AI chat — runs privately on your device.</div><div class="suggest"></div></div>`;
-    const s = list.querySelector(".suggest");
-    for (const q of ["Explain quantum computing simply", "Write a short poem about Chennai rain",
-                     "Help me plan a 3-day study schedule", "Write a Python function to reverse a string"]) {
-      const b = document.createElement("button"); b.className = "btn"; b.textContent = q;
-      b.onclick = () => { $("input").value = q; send(); }; s.append(b);
-    }
-    return;
-  }
-  for (const m of c.messages) bubble(m.role, m.content);
+  if (!c || !c.messages.length) return renderEmpty();
+  $("list").innerHTML = "";
+  for (const m of c.messages) addMsg(m);
+  if (live && live.chatId === c.id) addLive();
   scroll();
 }
 
+const nearBottom = () => { const m = $("messages"); return m.scrollHeight - m.scrollTop - m.clientHeight < 80; };
 const scroll = () => { const m = $("messages"); m.scrollTop = m.scrollHeight; };
 function render() { renderSidebar(); renderMessages(); }
 
 function status(text, pct) {
   const s = $("status");
   if (!text) { s.innerHTML = ""; return; }
-  s.innerHTML = `<div></div>` + (pct != null ? `<div class="bar"><div style="width:${pct}%"></div></div>` : "");
+  s.innerHTML = "<div></div>" + (pct != null ? `<div class="bar"><div style="width:${pct}%"></div></div>` : "");
   s.firstChild.textContent = text;
 }
 
-async function ensureEngine() {
-  if (engine && loadedModel === modelSel.value) return engine;
-  if (!navigator.gpu) throw new Error("Your browser doesn't support WebGPU. Please use the latest Chrome or Edge on desktop or Android.");
-  status("Loading model…", 0);
-  const cb = p => status(p.text, Math.round((p.progress || 0) * 100));
-  if (engine) await engine.reload(modelSel.value);
-  else engine = await webllm.CreateMLCEngine(modelSel.value, { initProgressCallback: cb });
-  loadedModel = modelSel.value; status("");
-  return engine;
+function updateControls() {
+  const btn = $("send");
+  btn.textContent = busy ? "Stop" : "Send";
+  btn.classList.toggle("stop", busy);
+  modelSel.disabled = busy || loading > 0;
 }
 
+// ---------- send / stop ----------
 async function send() {
-  const input = $("input"); const text = input.value.trim();
+  const input = $("input");
+  const text = input.value.trim();
   if (!text || busy) return;
-  if (!current()) newChat();
-  const c = current();
-  if (!c.messages.length) $("list").innerHTML = "";
-  c.messages.push({ role: "user", content: text });
-  if (c.title === "New chat") c.title = text.slice(0, 40);
-  input.value = ""; autosize(); save(); renderSidebar();
-  bubble("user", text);
-  const out = bubble("assistant", "…"); scroll();
-  busy = true; $("send").disabled = true;
-  let reply = "";
-  try {
-    const eng = await ensureEngine();
-    status("Thinking…");
-    const stream = await eng.chat.completions.create({
-      stream: true, temperature: 0.7,
-      messages: [{ role: "system", content: SYSTEM }, ...c.messages.slice(-20)],
-    });
-    for await (const chunk of stream) {
-      reply += chunk.choices[0]?.delta?.content || "";
-      out.innerHTML = md(reply); scroll();
-    }
-    status("");
-  } catch (err) {
-    reply = reply || "⚠️ " + (err.message || err);
-    out.innerHTML = md(reply); status("");
+  let c = current();
+  if (!c) {
+    c = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: "New chat", messages: [] };
+    chats.unshift(c); currentId = c.id;
   }
-  c.messages.push({ role: "assistant", content: reply }); save();
-  busy = false; $("send").disabled = false; input.focus();
+  c.messages.push({ role: "user", content: text });
+  if (c.title === "New chat") c.title = text.replace(/\s+/g, " ").slice(0, 40);
+  input.value = ""; autosize();
+  busy = true; stopRequested = false; live = { chatId: c.id, text: "" };
+  save(); render(); updateControls();
+
+  let reply = "", finish = null, error = null;
+  try {
+    const eng = await getEngine();
+    if (!stopRequested) {
+      const stream = await eng.chat.completions.create({
+        stream: true, temperature: 0.7,
+        messages: [{ role: "system", content: SYSTEM }, ...contextFor(c)],
+      });
+      for await (const chunk of stream) {
+        const choice = chunk.choices?.[0];
+        reply += choice?.delta?.content || "";
+        if (choice?.finish_reason) finish = choice.finish_reason;
+        live.text = reply;
+        paintLive();
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    error = friendlyError(err);
+  }
+  status("");
+
+  const msg = { role: "assistant", content: reply };
+  if (error) { msg.error = true; msg.content = (reply ? reply + "\n\n" : "") + "⚠️ " + error; }
+  else if (stopRequested || finish === "abort") {
+    if (reply.trim()) msg.note = "Stopped";
+    else { msg.error = true; msg.content = "_Stopped._"; }
+  }
+  else if (finish === "length") msg.note = "Reply cut short (the AI's memory is full). Type “continue” or start a new chat.";
+  else if (!reply.trim()) { msg.error = true; msg.content = "_No reply. Please try again._"; }
+  c.messages.push(msg);
+  live = null; busy = false;
+  save(); updateControls();
+  if (currentId === c.id) renderMessages(); else renderSidebar();
+  if (!isPhone) input.focus();
 }
 
+async function stop() {
+  stopRequested = true;
+  try { await engine?.interruptGenerate(); } catch {}
+}
+
+// ---------- events ----------
 function autosize() { const t = $("input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 200) + "px"; }
 $("input").addEventListener("input", autosize);
-$("input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
-$("form").onsubmit = e => { e.preventDefault(); send(); };
-$("newChat").onclick = () => { newChat(); $("side").classList.remove("open"); };
-$("clearAll").onclick = () => { if (confirm("Delete all chats?")) { chats = []; currentId = null; save(); render(); } };
-$("menu").onclick = () => $("side").classList.toggle("open");
+$("input").addEventListener("keydown", e => {
+  // Enter sends on computers; on phones Enter makes a new line and you tap Send.
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !isPhone) { e.preventDefault(); send(); }
+});
+$("form").onsubmit = e => { e.preventDefault(); busy ? stop() : send(); };
+$("newChat").onclick = $("newChat2").onclick = () => { newChat(); closeSide(); if (!isPhone) $("input").focus(); };
+$("menu").onclick = () => $("side").classList.add("open");
+$("backdrop").onclick = closeSide;
+$("clearAll").onclick = () => {
+  if (!confirm("Delete all chats? This can't be undone.")) return;
+  chats = []; currentId = null; save(); render();
+};
+$("clearModels").onclick = async () => {
+  if (busy || loading) { alert("Please wait until Dido finishes what it's doing."); return; }
+  if (!confirm("Delete the downloaded AI models from this device to free up space?\nThey will download again the next time you chat.")) return;
+  try {
+    const webllm = await loadLib();
+    if (engine) { try { await engine.unload(); } catch {} }
+    engineModel = null; enginePromise = null;
+    for (const [id] of MODELS) {
+      for (const v of new Set([id, id.replace("q4f16_1", "q4f32_1")])) await webllm.deleteModelAllInfoInCache(v).catch(() => {});
+    }
+    store.set("dido.everLoaded", false);
+    status("Downloaded models deleted. Space freed.");
+  } catch (e) { status("Couldn't delete the models: " + (e.message || e)); }
+};
+
 render();
+updateControls();
+preloadIfCached();
 </script>
 </body>
 </html>
