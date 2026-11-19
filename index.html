@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Dido — Free AI Chat</title>
 <meta name="description" content="Dido is a free AI chat assistant. The AI runs on your own device: no login, no subscription, no API key.">
 <meta name="theme-color" content="#6d4aff">
@@ -50,6 +50,8 @@
   select { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); }
   select:disabled { opacity: .6; }
   .free { font-size: 12px; color: var(--muted); }
+  .toggle { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
   main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   header { display: none; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
   header b { flex: 1; font-size: 17px; }
@@ -112,6 +114,7 @@
       <select id="model"></select>
       <div class="free" id="modelHint" style="margin-top:4px"></div>
     </div>
+    <label class="toggle"><input type="checkbox" id="gpu"> Use the GPU when possible (faster)</label>
     <button class="btn link" id="clearAll">🗑 Delete all chats</button>
     <button class="btn link" id="clearModels">💾 Free up space (delete downloaded models)</button>
     <div class="free">100% free · no login · no subscription. Your chats never leave this device.</div>
@@ -130,48 +133,60 @@
         <textarea id="input" rows="1" placeholder="Message Dido…" aria-label="Message"></textarea>
         <button id="send" type="submit">Send</button>
       </div>
-      <div class="note">Your first message downloads the AI model once; after that it's saved on your device. Works best in Chrome or Edge.</div>
+      <div class="note" id="note">Your first message downloads the AI model once. After that it's saved on this device.</div>
     </form>
   </main>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/purify.min.js"></script>
 <script type="module">
-// The AI engine (WebLLM) is loaded on demand, so the app still opens even if the CDN is slow or down.
-const WEBLLM_URLS = [
-  "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/lib/index.js",
-  "https://unpkg.com/@mlc-ai/web-llm@0.2.79/lib/index.js",
-];
-// [model id, label, hint]. Sizes are the GPU memory each model needs.
-const MODELS = [
-  ["Qwen2.5-1.5B-Instruct-q4f16_1-MLC", "Qwen 2.5 1.5B · 1.6 GB", "Balanced: quick and fairly smart."],
-  ["Llama-3.2-1B-Instruct-q4f16_1-MLC", "Llama 3.2 1B · 0.9 GB", "Fastest. Best for phones."],
-  ["Llama-3.2-3B-Instruct-q4f16_1-MLC", "Llama 3.2 3B · 2.3 GB", "Smarter, a little slower."],
-  ["Phi-3.5-mini-instruct-q4f16_1-MLC", "Phi 3.5 mini · 3.7 GB", "Smart. Needs a good graphics card."],
-  ["Qwen2.5-7B-Instruct-q4f16_1-MLC", "Qwen 2.5 7B · 5.1 GB", "Smartest. Needs a strong graphics card."],
-];
-const PHONE_MODEL = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
-const SYSTEM = "You are Dido, a friendly and helpful AI assistant. Answer clearly and concisely, and reply in the same language the user writes in. Use markdown when it helps.";
-// Every model has a 4096-token memory. Keep the history we send well under that so there's room to reply.
-const HISTORY_BUDGET = 2400;
-const NO_GPU = "Your browser can't run the AI yet (WebGPU isn't available here). Please open Dido in the latest **Chrome** or **Edge** on a computer or Android phone. iPhone and iPad need iOS 26 or newer.";
+// The AI is llama.cpp compiled to WebAssembly (wllama). It uses the GPU through WebGPU when the
+// device supports it and the CPU otherwise, so it runs on any phone or computer.
+const ENGINE_URL = "./vendor/wllama/index.js";
+const WASM_PATHS = { default: "vendor/wllama/wllama.wasm" };
+// Slower build for older browsers/WebViews without JSPI or 64-bit memory (bundled, so it works offline too).
+const COMPAT = { worker: "vendor/wllama-compat/wllama.js", wasm: "vendor/wllama-compat/wllama.wasm" };
 
-const isPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+const isApp = !!window.DidoNative;   // set by the Android app
+const isPhone = isApp || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
   (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+const N_CTX = isPhone ? 2048 : 4096;              // the AI's memory, in tokens
+const HISTORY_BUDGET = Math.round(N_CTX * 0.5);   // how much chat history we send
+const MAX_REPLY = Math.round(N_CTX * 0.4);        // longest reply
+
+// Each model lists several download sources (Hugging Face repos); the first one that works is used.
+const MODELS = [
+  { id: "qwen3-1.7b", name: "Qwen3 1.7B", label: "Qwen3 1.7B · 1.1 GB", qwen3: true,
+    hint: "Recommended. Good answers and understands Tamil.",
+    sources: [{ repo: "unsloth/Qwen3-1.7B-GGUF", quant: "Q4_K_M" }, { repo: "ggml-org/Qwen3-1.7B-GGUF", quant: "Q4_K_M" },
+              { repo: "Qwen/Qwen3-1.7B-GGUF" }] },
+  { id: "qwen3-0.6b", name: "Qwen3 0.6B", label: "Qwen3 0.6B · 0.4 GB", qwen3: true,
+    hint: "Fastest and smallest. Simpler answers.",
+    sources: [{ repo: "unsloth/Qwen3-0.6B-GGUF", quant: "Q4_K_M" }, { repo: "ggml-org/Qwen3-0.6B-GGUF", quant: "Q4_K_M" },
+              { repo: "Qwen/Qwen3-0.6B-GGUF" }] },
+  { id: "qwen2.5-1.5b", name: "Qwen 2.5 1.5B", label: "Qwen 2.5 1.5B · 1.1 GB",
+    hint: "Older alternative, mostly English.",
+    sources: [{ repo: "Qwen/Qwen2.5-1.5B-Instruct-GGUF", quant: "Q4_K_M" }] },
+];
+const SYSTEM = "You are Dido, a friendly and helpful AI assistant. Answer clearly and concisely. " +
+  "Reply in the same language the user writes in; if they write Tamil or another language in English letters, reply the same way. " +
+  "Use markdown when it helps.";
+
 const $ = id => document.getElementById(id);
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem(k); } catch {} },
 };
 
 let chats = store.get("dido.chats", []);
 if (!Array.isArray(chats)) chats = [];
 chats = chats.filter(c => c && Array.isArray(c.messages) && c.messages.length);
 let currentId = store.get("dido.current", null);
-let busy = false, stopRequested = false, live = null;   // live = reply being streamed: { chatId, text, el }
-let lib = null, engine = null, engineModel = null, enginePromise = null, loadChain = Promise.resolve();
-let loading = 0, gpuInfo = null;
+let busy = false, stopRequested = false, live = null, abortCtl = null, loadAbort = null;
+let lib = null, cacheMgr = null, llm = null, llmModel = null, onGPU = false;
+let engineKey = null, enginePromise = null, loadChain = Promise.resolve(), loading = 0;
 
 // ---------- markdown ----------
 if (window.marked) marked.use({ gfm: true, breaks: true });
@@ -181,104 +196,204 @@ if (window.DOMPurify) DOMPurify.addHook("afterSanitizeAttributes", n => {
 const esc = s => s.replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 const md = t => window.marked && window.DOMPurify
   ? DOMPurify.sanitize(marked.parse(t || "")) : esc(t || "").replace(/\n/g, "<br>");
+// Qwen3 can "think" in <think> tags before answering; hide that part.
+const visible = t => t.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").replace(/^\s+/, "");
 
-// ---------- model picker ----------
-const modelSel = $("model");
-for (const [id, label] of MODELS) modelSel.add(new Option(label, id));
-modelSel.value = store.get("dido.model", isPhone ? PHONE_MODEL : MODELS[0][0]);
-if (!modelSel.value) modelSel.value = MODELS[0][0];
-const showHint = () => { $("modelHint").textContent = MODELS.find(m => m[0] === modelSel.value)?.[2] || ""; };
-showHint();
+// ---------- settings ----------
+const modelSel = $("model"), gpuBox = $("gpu");
+for (const m of MODELS) modelSel.add(new Option(m.label, m.id));
+modelSel.value = store.get("dido.model", MODELS[0].id);
+if (!modelSel.value) modelSel.value = MODELS[0].id;
+gpuBox.checked = store.get("dido.gpu", true);
+const currentModel = () => MODELS.find(m => m.id === modelSel.value) || MODELS[0];
+const wantedKey = () => modelSel.value + (gpuBox.checked ? ":gpu" : ":cpu");
+function showHint() {
+  const m = currentModel();
+  let where = "";
+  if (llm && llmModel === m.id) where = onGPU ? " Running on the GPU ⚡" : " Running on the CPU.";
+  $("modelHint").textContent = m.hint + where;
+}
 modelSel.onchange = () => {
-  store.set("dido.model", modelSel.value);
-  showHint();
-  if (engine && engineModel !== modelSel.value) status("The new model will load when you send your next message.");
+  store.set("dido.model", modelSel.value); showHint();
+  if (llm) status("The new model will load when you send your next message.");
   preloadIfCached();
 };
+gpuBox.onchange = () => {
+  store.set("dido.gpu", gpuBox.checked);
+  if (llm) status("This takes effect with your next message.");
+  preloadIfCached();
+};
+if (isApp) $("note").textContent = "Your first message downloads the AI model once (needs internet). After that Dido works offline.";
 
 // ---------- AI engine ----------
 async function loadLib() {
   if (lib) return lib;
-  let lastErr;
-  for (const url of WEBLLM_URLS) {
-    try { return (lib = await import(url)); } catch (e) { lastErr = e; }
+  if (typeof WebAssembly !== "object") throw new Error("NO_WASM");
+  lib = await import(ENGINE_URL);
+  return lib;
+}
+
+// Stores downloaded models in the Origin Private File System, or in the Cache API where that's missing.
+class CacheApiStore {
+  isSupported() { return typeof caches !== "undefined"; }
+  key(k) { return "https://dido-models.local/" + encodeURIComponent(k); }
+  box() { return caches.open("dido-models"); }
+  async read(k) { const r = await (await this.box()).match(this.key(k)); return r ? r.blob() : null; }
+  async write(k, stream) { await (await this.box()).put(this.key(k), new Response(stream)); }
+  async getSize(k) { const r = await (await this.box()).match(this.key(k)); return r ? (await r.blob()).size : -1; }
+  async list() {
+    const box = await this.box(), out = [];
+    for (const req of await box.keys()) {
+      const r = await box.match(req);
+      out.push({ key: decodeURIComponent(req.url.split("/").pop()), size: r ? (await r.blob()).size : 0 });
+    }
+    return out;
   }
-  throw lastErr;
+  async delete(k) { await (await this.box()).delete(this.key(k)); }
+}
+function getCacheManager() {
+  if (!cacheMgr) {
+    try { cacheMgr = new lib.CacheManager(); }
+    catch { cacheMgr = new lib.CacheManager([new CacheApiStore()]); }
+  }
+  return cacheMgr;
 }
 
-async function checkGPU() {
-  if (gpuInfo) return gpuInfo;
-  const adapter = navigator.gpu &&
-    await navigator.gpu.requestAdapter({ powerPreference: "high-performance" }).catch(() => null);
-  if (!adapter) throw new Error(NO_GPU);
-  return (gpuInfo = { f16: adapter.features.has("shader-f16") });
+// Find the model file on Hugging Face (remembered afterwards, so a saved model also loads offline).
+async function resolveModelUrl(model) {
+  const saved = store.get("dido.url." + model.id, null);
+  if (saved) return saved;
+  let lastErr = null;
+  for (const src of model.sources) {
+    try {
+      const res = await fetch(`https://huggingface.co/api/models/${src.repo}/tree/main?recursive=true`);
+      if (!res.ok) throw new Error(`MODEL_NOT_FOUND (${src.repo}: ${res.status})`);
+      const files = (await res.json()).filter(f => f.type === "file" && /\.gguf$/i.test(f.path) && !/mmproj/i.test(f.path));
+      const pick = q => files.find(f => f.path.toUpperCase().includes(q));
+      const file = src.quant ? pick(src.quant.toUpperCase()) : (pick("Q4_K_M") || pick("Q8_0"));
+      if (!file) throw new Error(`MODEL_NOT_FOUND (${src.repo}: no ${src.quant || "GGUF"} file)`);
+      const path = file.path.replace(/-\d{5}-of-(\d{5})\.gguf$/i, "-00001-of-$1.gguf");   // split model: first part
+      const url = `https://huggingface.co/${src.repo}/resolve/main/${path}`;
+      store.set("dido.url." + model.id, url);
+      return url;
+    } catch (e) {
+      lastErr = e;
+      if (e instanceof TypeError) break;   // offline: other sources won't work either
+    }
+  }
+  throw lastErr || new Error("MODEL_NOT_FOUND");
 }
 
-// Some GPUs (many phones) can't do 16-bit math: use the 32-bit build of the same model there.
-const variant = id => gpuInfo && !gpuInfo.f16 ? id.replace("q4f16_1", "q4f32_1") : id;
+async function isCached(url) {
+  try {
+    const cm = getCacheManager();
+    const name = await cm.getNameFromURL(url);
+    const size = await cm.getSize(name);
+    if (size <= 0) return false;
+    const meta = await cm.getMetadata(name);
+    return !meta || !meta.originalSize || meta.originalSize === size;
+  } catch { return false; }
+}
 
-async function loadModel(want) {
+const mb = n => Math.round(n / 1048576).toLocaleString();
+const isNetErr = e => e instanceof TypeError || /fetch|network|download|MODEL_NOT_FOUND|load failed/i.test(String(e?.message || e));
+const isAbort = e => e?.name === "AbortError";
+
+async function loadModel(model) {
   loading++; updateControls();
   try {
-    await checkGPU();
-    const webllm = await loadLib();
-    status("Loading AI model…", 0);
-    const id = variant(want);
-    const initProgressCallback = r => status(r.text, Math.round((r.progress || 0) * 100));
-    if (!engine) engine = await webllm.CreateMLCEngine(id, { initProgressCallback });
-    else await engine.reload(id);
-    store.set("dido.everLoaded", true);
-    navigator.storage?.persist?.().catch(() => {});   // ask the browser not to evict the saved model
-    status("");
-    return engine;
+    const wl = await loadLib();
+    if (llm) { const old = llm; llm = null; llmModel = null; showHint(); try { await old.exit(); } catch {} }
+    status(`Getting ${model.name} ready…`);
+    const url = await resolveModelUrl(model);
+    const modes = gpuBox.checked && navigator.gpu ? ["gpu", "cpu"] : ["cpu"];
+    let lastErr = null;
+    for (const mode of modes) {
+      const w = new wl.Wllama(WASM_PATHS, {
+        suppressNativeLog: true, allowOffline: true, cacheManager: getCacheManager(), logger: wl.LoggerWithoutDebug,
+      });
+      w.setCompat(COMPAT);
+      loadAbort = new AbortController();
+      try {
+        await w.loadModelFromUrl(url, {
+          n_ctx: N_CTX, ...(mode === "cpu" ? { n_gpu_layers: 0 } : {}), signal: loadAbort.signal,
+          progressCallback: ({ loaded, total }) => {
+            if (total && loaded < total) status(`Downloading ${model.name}… ${mb(loaded)} of ${mb(total)} MB`, loaded / total * 100);
+            else status(`Starting ${model.name}…`);
+          },
+        });
+        llm = w; llmModel = model.id; onGPU = mode === "gpu";
+        store.set("dido.everLoaded", true);
+        navigator.storage?.persist?.().catch(() => {});   // ask the browser to keep the saved model
+        status(""); showHint();
+        return w;
+      } catch (e) {
+        lastErr = e;
+        try { await w.exit(); } catch {}
+        if (isAbort(e) || isNetErr(e) || /quota|storage/i.test(String(e?.message || e))) break;
+        if (mode === "gpu") {   // the GPU didn't work on this device: use the CPU from now on
+          console.warn("GPU load failed, using the CPU", e);
+          gpuBox.checked = false; store.set("dido.gpu", false);
+          engineKey = wantedKey();   // this load now stands for the CPU setting
+        }
+      } finally { loadAbort = null; }
+    }
+    throw lastErr || new Error("Couldn't start the AI.");
   } finally { loading--; updateControls(); }
 }
 
 // Loads run one after another, never in parallel.
 function getEngine() {
-  const want = modelSel.value;
-  if (enginePromise && engineModel === want) return enginePromise;
-  engineModel = want;
-  const p = loadChain.then(() => loadModel(want));
+  const want = wantedKey();
+  if (enginePromise && engineKey === want) return enginePromise;
+  engineKey = want;
+  const model = currentModel();
+  const p = loadChain.then(() => loadModel(model));
   loadChain = p.catch(() => {});
   enginePromise = p;
-  p.catch(() => { if (enginePromise === p) { enginePromise = null; engineModel = null; } });
+  p.catch(() => { if (enginePromise === p) { enginePromise = null; engineKey = null; } });
   return p;
 }
 
 function resetEngine() {
-  const old = engine;
-  engine = null; engineModel = null; enginePromise = null;
-  try { old?.unload()?.catch?.(() => {}); } catch {}
+  const old = llm;
+  llm = null; llmModel = null; engineKey = null; enginePromise = null;
+  if (old) old.exit().catch(() => {});
+  showHint();
 }
 
-// Returning visitors: if the chosen model is already saved on this device, get it ready right away.
+// If the chosen model is already saved on this device, get it ready right away.
 async function preloadIfCached() {
-  if (!navigator.gpu || busy || !store.get("dido.everLoaded", false)) return;
+  if (busy || !store.get("dido.everLoaded", false) || engineKey === wantedKey()) return;
+  const url = store.get("dido.url." + currentModel().id, null);
+  if (!url) return;
   try {
-    await checkGPU();
-    const webllm = await loadLib();
-    const want = modelSel.value;
-    if (engineModel === want) return;
-    if (await webllm.hasModelInCache(variant(want))) await getEngine();
+    await loadLib();
+    if (await isCached(url)) await getEngine();
   } catch (e) { console.warn("Preload skipped:", e); status(""); }
 }
 
 function friendlyError(err) {
   const msg = String(err?.message || err);
-  const name = err?.name || "";
-  if (msg === NO_GPU) return msg;
-  if (name === "ContextWindowSizeExceededError" || /context window/i.test(msg))
-    return "This is too long for the AI's memory. Please send a shorter message or start a **New chat**.";
-  if (/dynamically imported module|Importing a module script failed/i.test(msg))
-    return "Couldn't load the AI engine. Check your internet connection and reload the page.";
-  if (name === "QuotaExceededError" || /quota/i.test(msg))
-    return "Not enough free storage on this device to save the model. Free up some space or pick a smaller model.";
-  if (/device.*lost|out of memory|OOM|allocat/i.test(msg)) {
+  const tooOld = isApp
+    ? "Your phone's web engine is too old to run the AI. Please update **Android System WebView** (and Chrome) from the Play Store, then reopen Dido."
+    : "This browser can't run the AI. Please use the latest Chrome, Edge, Firefox or Safari.";
+  if (msg === "NO_WASM") return tooOld;
+  // llama.cpp fails a reply when the model outputs bytes that aren't valid text (wllama then reports a bad array length)
+  if (/Invalid typed array length|invalid UTF-8|type_error/i.test(msg))
+    return "The AI got mixed up and stopped. Please try again.";
+  if (err?.type === "kv_cache_full" || /kv.?cache|context (size|window)|too long/i.test(msg))
+    return "This chat is too long for the AI's memory. Please start a **New chat**.";
+  if (/MODEL_NOT_FOUND/.test(msg))
+    return "Couldn't find this model online right now. Please pick another model in the menu and try again.";
+  if (err?.name === "QuotaExceededError" || /quota|storage/i.test(msg))
+    return "Not enough free storage on this device to save the model. Free up some space or pick a smaller model (Qwen3 0.6B).";
+  if (/memory|OOM|alloc|Aborted\(|RangeError|RuntimeError|unreachable/i.test(msg)) {
     resetEngine();
-    return "Your device ran out of memory for this model. Pick a smaller one (Llama 3.2 1B) in the menu and try again.";
+    return "Your device ran out of memory for this model. Pick a smaller one (Qwen3 0.6B) in the menu, or turn off the GPU option, and try again.";
   }
-  if (/fetch|network|load failed/i.test(msg))
+  if (/CompileError|BigInt|WebAssembly/i.test(msg)) return tooOld;
+  if (isNetErr(err))
     return "Couldn't download the AI model. Check your internet connection and try again.";
   return msg;
 }
@@ -316,6 +431,10 @@ function contextFor(c) {
 
 // ---------- rendering ----------
 const closeSide = () => $("side").classList.remove("open");
+window.didoBack = () => {   // Android back button: close the menu first
+  if ($("side").classList.contains("open")) { closeSide(); return true; }
+  return false;
+};
 
 function renderSidebar() {
   const box = $("chats");
@@ -339,6 +458,11 @@ function renderSidebar() {
   }
 }
 
+async function copyText(text) {
+  if (window.DidoNative?.copy) { window.DidoNative.copy(text); return; }
+  await navigator.clipboard.writeText(text);
+}
+
 function addMsg(m) {
   const el = document.createElement("div");
   el.className = "msg " + m.role + (m.error ? " error" : "");
@@ -352,7 +476,7 @@ function addMsg(m) {
     const copy = document.createElement("button");
     copy.type = "button"; copy.textContent = "Copy";
     copy.onclick = async () => {
-      try { await navigator.clipboard.writeText(m.content); copy.textContent = "Copied ✓"; }
+      try { await copyText(m.content); copy.textContent = "Copied ✓"; }
       catch { copy.textContent = "Couldn't copy"; }
       setTimeout(() => { copy.textContent = "Copy"; }, 1500);
     };
@@ -419,7 +543,8 @@ function updateControls() {
   const btn = $("send");
   btn.textContent = busy ? "Stop" : "Send";
   btn.classList.toggle("stop", busy);
-  modelSel.disabled = busy || loading > 0;
+  modelSel.disabled = gpuBox.disabled = busy || loading > 0;
+  try { window.DidoNative?.keepAwake?.(busy || loading > 0); } catch {}   // keep the screen on while working
 }
 
 // ---------- send / stop ----------
@@ -442,32 +567,38 @@ async function send() {
   try {
     const eng = await getEngine();
     if (!stopRequested) {
-      const stream = await eng.chat.completions.create({
-        stream: true, temperature: 0.7,
+      abortCtl = new AbortController();
+      const model = MODELS.find(m => m.id === llmModel) || currentModel();
+      const stream = await eng.createChatCompletion({
+        stream: true, max_tokens: MAX_REPLY, temperature: 0.7, top_p: 0.8, top_k: 20,
         messages: [{ role: "system", content: SYSTEM }, ...contextFor(c)],
+        abortSignal: abortCtl.signal,
+        ...(model.qwen3 ? { chat_template_kwargs: { enable_thinking: false } } : {}),
       });
       for await (const chunk of stream) {
         const choice = chunk.choices?.[0];
         reply += choice?.delta?.content || "";
         if (choice?.finish_reason) finish = choice.finish_reason;
-        live.text = reply;
+        live.text = visible(reply);
         paintLive();
       }
     }
   } catch (err) {
-    console.error(err);
-    error = friendlyError(err);
+    if (!isAbort(err)) { console.error(err); error = friendlyError(err); }
   }
+  abortCtl = null;
   status("");
+  reply = visible(reply).trimEnd();
 
   const msg = { role: "assistant", content: reply };
-  if (error) { msg.error = true; msg.content = (reply ? reply + "\n\n" : "") + "⚠️ " + error; }
-  else if (stopRequested || finish === "abort") {
-    if (reply.trim()) msg.note = "Stopped";
+  if (error && reply) msg.note = "Reply ended early.";   // keep the part that arrived
+  else if (error) { msg.error = true; msg.content = "⚠️ " + error; }
+  else if (stopRequested) {
+    if (reply) msg.note = "Stopped";
     else { msg.error = true; msg.content = "_Stopped._"; }
   }
-  else if (finish === "length") msg.note = "Reply cut short (the AI's memory is full). Type “continue” or start a new chat.";
-  else if (!reply.trim()) { msg.error = true; msg.content = "_No reply. Please try again._"; }
+  else if (finish === "length") msg.note = "Reply cut short. Type “continue” for more.";
+  else if (!reply) { msg.error = true; msg.content = "_No reply. Please try again._"; }
   c.messages.push(msg);
   live = null; busy = false;
   save(); updateControls();
@@ -475,9 +606,10 @@ async function send() {
   if (!isPhone) input.focus();
 }
 
-async function stop() {
+function stop() {
   stopRequested = true;
-  try { await engine?.interruptGenerate(); } catch {}
+  abortCtl?.abort();
+  loadAbort?.abort();   // also cancels a model download
 }
 
 // ---------- events ----------
@@ -499,18 +631,19 @@ $("clearModels").onclick = async () => {
   if (busy || loading) { alert("Please wait until Dido finishes what it's doing."); return; }
   if (!confirm("Delete the downloaded AI models from this device to free up space?\nThey will download again the next time you chat.")) return;
   try {
-    const webllm = await loadLib();
-    if (engine) { try { await engine.unload(); } catch {} }
-    engineModel = null; enginePromise = null;
-    for (const [id] of MODELS) {
-      for (const v of new Set([id, id.replace("q4f16_1", "q4f32_1")])) await webllm.deleteModelAllInfoInCache(v).catch(() => {});
-    }
+    await loadLib();
+    resetEngine();
+    await getCacheManager().clear();
+    for (const m of MODELS) store.del("dido.url." + m.id);
     store.set("dido.everLoaded", false);
     status("Downloaded models deleted. Space freed.");
   } catch (e) { status("Couldn't delete the models: " + (e.message || e)); }
 };
 
+if (/[?&]restarted=1/.test(location.search))
+  status("Dido restarted because the phone ran low on memory. If this keeps happening, pick Qwen3 0.6B in the menu.");
 render();
+showHint();
 updateControls();
 preloadIfCached();
 </script>

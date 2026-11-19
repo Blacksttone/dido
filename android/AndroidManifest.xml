@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Version and SDK levels are set by build.sh. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="app.dido.freechat">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- allowBackup="false": chats stay on this phone and are not uploaded to cloud backups. -->
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/AppTheme"
+        android:allowBackup="false"
+        android:supportsRtl="true"
+        android:hardwareAccelerated="true">
+
+        <!-- configChanges: rotating the phone, the keyboard or dark mode must not restart the page
+             (that would unload the AI model). -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
