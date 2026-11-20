@@ -52,6 +52,9 @@
   .free { font-size: 12px; color: var(--muted); }
   .toggle { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
   .toggle input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+  #memory { width: 100%; resize: vertical; min-height: 56px; max-height: 140px; padding: 8px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel); font-size: 16px; line-height: 1.35; }
+  .meta a { color: var(--muted); }
   main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   header { display: none; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
   header b { flex: 1; font-size: 17px; }
@@ -115,6 +118,11 @@
       <div class="free" id="modelHint" style="margin-top:4px"></div>
     </div>
     <label class="toggle"><input type="checkbox" id="gpu"> Use the GPU when possible (faster)</label>
+    <label class="toggle"><input type="checkbox" id="web"> Look up facts on Wikipedia (needs internet)</label>
+    <div>
+      <label class="small" for="memory">What Dido should remember about you</label>
+      <textarea id="memory" rows="2" placeholder="e.g. My name is Arun. I'm a college student in Madurai."></textarea>
+    </div>
     <button class="btn link" id="clearAll">🗑 Delete all chats</button>
     <button class="btn link" id="clearModels">💾 Free up space (delete downloaded models)</button>
     <div class="free">100% free · no login · no subscription. Your chats never leave this device.</div>
@@ -169,9 +177,20 @@ const MODELS = [
     hint: "Older alternative, mostly English.",
     sources: [{ repo: "Qwen/Qwen2.5-1.5B-Instruct-GGUF", quant: "Q4_K_M" }] },
 ];
-const SYSTEM = "You are Dido, a friendly and helpful AI assistant. Answer clearly and concisely. " +
-  "Reply in the same language the user writes in; if they write Tamil or another language in English letters, reply the same way. " +
-  "Use markdown when it helps.";
+const PERSONA = "You are Dido, a free AI assistant that runs privately on the user's own phone or computer. " +
+  "You are warm, friendly and a little playful, like a helpful friend. Answer clearly and concisely. " +
+  "Reply in the same language the user writes in; if they write Tamil or another language in English letters (like Tanglish), reply the same way. " +
+  "If you are not sure about a fact, say so honestly instead of guessing. Use markdown when it helps. " +
+  "Your name is Dido. Never say you are Qwen, ChatGPT or any other AI.";
+
+function systemPrompt(extra) {
+  const now = new Date().toLocaleString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit" });
+  let s = PERSONA + `\nRight now it is ${now}.`;
+  const mem = memoryBox.value.trim();
+  if (mem) s += `\nThings the user asked you to remember about them (use them naturally, e.g. call them by their name):\n${mem}`;
+  if (extra) s += "\n\n" + extra;
+  return s;
+}
 
 const $ = id => document.getElementById(id);
 const store = {
@@ -205,6 +224,193 @@ for (const m of MODELS) modelSel.add(new Option(m.label, m.id));
 modelSel.value = store.get("dido.model", MODELS[0].id);
 if (!modelSel.value) modelSel.value = MODELS[0].id;
 gpuBox.checked = store.get("dido.gpu", true);
+const webBox = $("web"), memoryBox = $("memory");
+webBox.checked = store.get("dido.web", true);
+webBox.onchange = () => store.set("dido.web", webBox.checked);
+memoryBox.value = store.get("dido.memory", "");
+memoryBox.oninput = () => store.set("dido.memory", memoryBox.value);
+
+// "My name is Arun" / "call me Arun" / "en peru Arun" → remembered for next time.
+function rememberFromMessage(text) {
+  const m = text.match(/\b(?:my name is|my name's|call me|en (?:peru|peyar|per))\s+([A-Za-z஀-௿][A-Za-z஀-௿.'-]{1,30})/i);
+  if (!m) return;
+  const name = m[1].replace(/[.'-]+$/, "");
+  if (/^(is|was|not|the|a|an|enna|what|yaar|yenna)$/i.test(name)) return;
+  const lines = memoryBox.value.split("\n").filter(l => l.trim() && !/^Name:/i.test(l.trim()));
+  memoryBox.value = ["Name: " + name[0].toUpperCase() + name.slice(1), ...lines].join("\n");
+  store.set("dido.memory", memoryBox.value);
+}
+
+// ---------- built-in tools: exact answers that work offline ----------
+const fmtNum = n => !isFinite(n) ? null
+  : (Math.abs(n) >= 1e15 || (Math.abs(n) < 1e-6 && n !== 0)) ? n.toExponential(6)
+  : Number(n.toPrecision(12)).toLocaleString("en-IN", { maximumFractionDigits: 10 });
+
+// Safe calculator (no eval): + - * / ^ % ! ( ), sqrt, cbrt, sin/cos/tan (degrees), log, ln, abs, round, pi, e.
+function calc(src) {
+  const s = src.toLowerCase()
+    .replace(/(\d),(?=\d)/g, "$1")
+    .replace(/\bto the power of\b|\bpower\b/g, "^").replace(/\bsquare root of\b|\broot of\b/g, "sqrt ")
+    .replace(/\bsquared\b/g, "^2").replace(/\bcubed\b/g, "^3")
+    .replace(/\bplus\b/g, "+").replace(/\bminus\b/g, "-")
+    .replace(/\b(times|multiplied by|into)\b/g, "*").replace(/\b(divided by|by|over)\b/g, "/")
+    .replace(/[×x](?=\s*[\d(.])/g, "*").replace(/÷/g, "/").replace(/\*\*/g, "^").replace(/π/g, "pi").replace(/√/g, "sqrt ");
+  const tokens = s.match(/\d*\.?\d+(?:e[+-]?\d+)?|[a-z]+|[-+*/^%!()]|\S/g) || [];
+  const FUN = { sqrt: Math.sqrt, cbrt: Math.cbrt, abs: Math.abs, round: Math.round, floor: Math.floor, ceil: Math.ceil,
+    exp: Math.exp, ln: Math.log, log: Math.log10, sin: d => Math.sin(d * Math.PI / 180),
+    cos: d => Math.cos(d * Math.PI / 180), tan: d => Math.tan(d * Math.PI / 180) };
+  const CONST = { pi: Math.PI, e: Math.E };
+  let i = 0;
+  const peek = () => tokens[i], next = () => tokens[i++];
+  const fact = n => { if (n < 0 || n > 170 || n % 1) throw 0; let r = 1; for (let k = 2; k <= n; k++) r *= k; return r; };
+  const expr = () => { let v = term(); while (peek() === "+" || peek() === "-") v = next() === "+" ? v + term() : v - term(); return v; };
+  const term = () => { let v = unary(); while (peek() === "*" || peek() === "/") v = next() === "*" ? v * unary() : v / unary(); return v; };
+  const unary = () => peek() === "-" ? (next(), -unary()) : peek() === "+" ? (next(), unary()) : power();
+  const power = () => { const b = postfix(); return peek() === "^" ? (next(), Math.pow(b, unary())) : b; };
+  const postfix = () => { let v = primary(); for (;;) { if (peek() === "!") { next(); v = fact(v); } else if (peek() === "%") { next(); v /= 100; } else return v; } };
+  const primary = () => {
+    const t = next();
+    if (t === undefined) throw 0;
+    if (/^[\d.]/.test(t)) return parseFloat(t);
+    if (t === "(") { const v = expr(); if (next() !== ")") throw 0; return v; }
+    if (Object.hasOwn(CONST, t)) return CONST[t];
+    if (Object.hasOwn(FUN, t)) {
+      if (peek() === "(") { next(); const v = expr(); if (next() !== ")") throw 0; return FUN[t](v); }
+      return FUN[t](postfix());
+    }
+    throw 0;
+  };
+  try { const v = expr(); return i === tokens.length && isFinite(v) ? v : null; } catch { return null; }
+}
+
+const UNITS = {};
+const unit = (type, factor, ...names) => names.forEach(n => { UNITS[n] = { type, factor, name: names[names.length - 1] }; });
+unit("length", 0.001, "mm", "millimeter", "millimetre", "millimetres"); unit("length", 0.01, "cm", "centimeter", "centimetre", "centimetres");
+unit("length", 1, "m", "meter", "metre", "metres"); unit("length", 1000, "km", "kilometer", "kilometre", "kilometres");
+unit("length", 0.0254, "in", "inch", "inches"); unit("length", 0.3048, "ft", "foot", "feet");
+unit("length", 0.9144, "yd", "yard", "yards"); unit("length", 1609.344, "mi", "mile", "miles");
+unit("mass", 1e-6, "mg", "milligram", "milligrams"); unit("mass", 0.001, "g", "gm", "gram", "grams");
+unit("mass", 1, "kg", "kilo", "kilogram", "kilograms"); unit("mass", 0.45359237, "lb", "lbs", "pound", "pounds");
+unit("mass", 0.028349523125, "oz", "ounce", "ounces"); unit("mass", 1000, "tonne", "ton", "tons");
+unit("volume", 0.001, "ml", "millilitre", "milliliter", "millilitres"); unit("volume", 1, "l", "litre", "liter", "litres");
+unit("volume", 3.785411784, "gal", "gallon", "gallons"); unit("volume", 0.24, "cup", "cups");
+unit("time", 1, "s", "sec", "second", "seconds"); unit("time", 60, "min", "minute", "minutes");
+unit("time", 3600, "h", "hr", "hour", "hours"); unit("time", 86400, "day", "days");
+unit("time", 604800, "week", "weeks"); unit("time", 31557600, "year", "years");
+unit("speed", 1 / 3.6, "kmh", "kph", "km/h"); unit("speed", 0.44704, "mph");
+unit("area", 1, "sqm", "m2", "square metres"); unit("area", 0.09290304, "sqft", "ft2", "square feet");
+unit("area", 4046.8564224, "acre", "acres"); unit("area", 10000, "hectare", "hectares");
+unit("data", 1e3, "kb", "kilobytes"); unit("data", 1e6, "mb", "megabytes"); unit("data", 1e9, "gb", "gigabytes"); unit("data", 1e12, "tb", "terabytes");
+const TEMP = { c: "c", celsius: "c", centigrade: "c", f: "f", fahrenheit: "f", kelvin: "k" };
+const lookupUnit = n => { n = n.toLowerCase().replace(/°/g, ""); return UNITS[n] || UNITS[n.replace(/s$/, "")] || null; };
+
+function convert(text) {
+  const m = text.match(/^(?:convert\s+|what(?:'s| is)\s+)?(-?[\d.,]+)\s*([a-z°/2]+)\s+(?:to|in|into)\s+([a-z°/2]+)\s*\??$/i);
+  if (!m) return null;
+  const v = parseFloat(m[1].replace(/,/g, "")), from = m[2].toLowerCase().replace(/°/g, ""), to = m[3].toLowerCase().replace(/°/g, "");
+  if (!isFinite(v)) return null;
+  if (TEMP[from] && TEMP[to]) {
+    const c = TEMP[from] === "c" ? v : TEMP[from] === "f" ? (v - 32) * 5 / 9 : v - 273.15;
+    const r = TEMP[to] === "c" ? c : TEMP[to] === "f" ? c * 9 / 5 + 32 : c + 273.15;
+    const sym = { c: "°C", f: "°F", k: "K" };
+    return `${fmtNum(v)} ${sym[TEMP[from]]} = **${fmtNum(Math.round(r * 100) / 100)} ${sym[TEMP[to]]}**`;
+  }
+  const a = lookupUnit(from), b = lookupUnit(to);
+  if (!a || !b || a.type !== b.type) return null;
+  return `${fmtNum(v)} ${m[2]} = **${fmtNum(v * a.factor / b.factor)} ${m[3]}**`;
+}
+
+function dateTime(text) {
+  const t = text.toLowerCase().replace(/[?!.]/g, "").replace(/\s+/g, " ").trim();
+  const now = new Date();
+  const time = /^(what('?s| is)? )?(the )?(current )?time( is it)?( now| right now)?$|^time now$|^(ippo|ipo|ipa) (enna )?(time|neram)( aagudhu| aaguthu| aachu)?$/;
+  const date = /^(what('?s| is) )?(the )?(today'?s |current )?date( today)?$|^what day is (it|today)$|^(what('?s| is) )?today$|^(inniku|innaiku|innikku|indru) (enna )?(date|thethi|kizhamai|day|naal)$/;
+  if (time.test(t)) return `It's **${now.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })}**.`;
+  if (date.test(t)) return `Today is **${now.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}**.`;
+  return null;
+}
+
+// Returns an instant, exact answer when the message is a calculation, conversion or date/time question.
+function toolAnswer(text) {
+  const dt = dateTime(text);
+  if (dt) return { answer: dt, note: "🕒 From your device's clock" };
+  const conv = convert(text.trim());
+  if (conv) return { answer: conv, note: "📏 Converted by Dido's tools" };
+  const pct = text.match(/^(?:what(?:'s| is)\s+)?(-?[\d.,]+)\s*(?:%|percent)\s+of\s+(-?[\d.,]+)\s*\??$/i);
+  if (pct) {
+    const a = parseFloat(pct[1].replace(/,/g, "")), b = parseFloat(pct[2].replace(/,/g, ""));
+    if (isFinite(a) && isFinite(b)) return { answer: `${fmtNum(a)}% of ${fmtNum(b)} = **${fmtNum(a / 100 * b)}**`, note: "🧮 Exact answer from Dido's calculator" };
+  }
+  const q = text.trim().replace(/^(what('?s| is)|calculate|compute|evaluate|solve|find|how much is)\s+/i, "")
+    .replace(/[?=!]+$/, "").replace(/\s*(enna|evlo|evvalavu|equals?)\s*$/i, "").trim();
+  if (!/\d/.test(q) || !/[-+*/^%!×÷x√]|\b(sqrt|plus|minus|times|divided|by|into|over|squared|cubed|power|sin|cos|tan|log|ln|root|abs)\b/i.test(q)) return null;
+  const v = calc(q);
+  if (v === null) return null;
+  return { answer: `\`${q}\` = **${fmtNum(v)}**`, note: "🧮 Exact answer from Dido's calculator" };
+}
+
+// ---------- Wikipedia lookup (free, no key) ----------
+const SMALL_TALK = /^(hi+|hello|hey|vanakkam|good (morning|afternoon|evening|night)|how are you|how r u|what'?s up|who are you|what('?s| is) your name|what can you do|thanks?|thank you|ok(ay)?|bye)\b/i;
+const FACT_Q = /^(who|what|when|where|which|why|how)\b|\b(tell me about|explain|describe|define|meaning of|history of|facts? about|information about|details about|yaaru|yaar|enna|epdi|eppadi|evlo|enga|eppo)\b/i;
+
+async function lookUp(text) {
+  const t = text.trim();
+  if (SMALL_TALK.test(t) || !FACT_Q.test(t) || t.split(/\s+/).length < 3 || t.length > 300) return null;
+  if (/\b(you|your|yourself|me|my|mine|i|i'm|we|our|us)\b/i.test(t)) return null;   // personal, not encyclopedic
+  const q = t.replace(/^(who|what|when|where|which|why|how)(\s+(is|are|was|were|did|does|do|many|much|old|big|far|long|tall))?\s+/i, "")
+    .replace(/\b(tell me (something )?about|explain|describe|define|the meaning of|meaning of|information about|details about|facts? about|please|pls|yaaru|yaar|enna|epdi|eppadi|evlo|enga|eppo)\b/gi, " ")
+    .replace(/[?!.]+/g, " ").replace(/\s+/g, " ").trim();
+  if (q.length < 2) return null;
+  const lang = /[஀-௿]/.test(t) ? "ta" : "en";
+  const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 6000);
+  const getJSON = async url => { const r = await fetch(url, { signal: ac.signal }); if (!r.ok) throw new Error(r.status); return r.json(); };
+  try {
+    const found = await getJSON(`https://${lang}.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=3&srsearch=${encodeURIComponent(q)}`);
+    const words = q.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    for (const hit of (found?.query?.search || []).slice(0, 2)) {
+      const sum = await getJSON(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(hit.title.replace(/ /g, "_"))}`);
+      if (sum.type === "disambiguation" || !sum.extract || sum.extract.length < 40) continue;
+      const hay = (sum.title + " " + sum.extract).toLowerCase();
+      if (words.length && !words.some(w => hay.includes(w))) continue;
+      return { title: sum.title, text: sum.extract.slice(0, 1200),
+        url: sum.content_urls?.desktop?.page || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(sum.title.replace(/ /g, "_"))}` };
+    }
+  } catch (e) { console.warn("Wikipedia lookup skipped:", e); }
+  finally { clearTimeout(timer); }
+  return null;
+}
+
+// ---------- voice: read answers aloud ----------
+const hasWebSpeech = "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
+const canSpeak = !!window.DidoNative?.speak || hasWebSpeech;
+let speakingBtn = null;
+window.didoSpeechDone = () => { if (speakingBtn) { speakingBtn.textContent = "🔊 Listen"; speakingBtn = null; } };
+function stopSpeaking() {
+  try { if (window.DidoNative?.stopSpeaking) window.DidoNative.stopSpeaking(); else if (hasWebSpeech) speechSynthesis.cancel(); } catch {}
+  window.didoSpeechDone();
+}
+function speak(markdown, btn) {
+  const wasThis = speakingBtn === btn;
+  stopSpeaking();
+  if (wasThis) return;
+  const box = document.createElement("div");
+  box.innerHTML = md(markdown);
+  const words = box.textContent.replace(/\s+/g, " ").trim();
+  if (!words) return;
+  const lang = /[஀-௿]/.test(words) ? "ta-IN" : "en-IN";
+  speakingBtn = btn; btn.textContent = "■ Stop";
+  if (window.DidoNative?.speak) { window.DidoNative.speak(words, lang); return; }
+  // Browsers cut off long utterances, so speak sentence-sized pieces.
+  const parts = words.match(/[^.!?।]{1,200}[.!?।]*\s*/g) || [words];
+  const voice = speechSynthesis.getVoices().find(v => v.lang.replace("_", "-").startsWith(lang.slice(0, 2)));
+  parts.forEach((p, k) => {
+    const u = new SpeechSynthesisUtterance(p);
+    u.lang = lang; if (voice) u.voice = voice;
+    if (k === parts.length - 1) u.onend = () => { if (speakingBtn === btn) window.didoSpeechDone(); };
+    u.onerror = () => { if (speakingBtn === btn) window.didoSpeechDone(); };
+    speechSynthesis.speak(u);
+  });
+}
 const currentModel = () => MODELS.find(m => m.id === modelSel.value) || MODELS[0];
 const wantedKey = () => modelSel.value + (gpuBox.checked ? ":gpu" : ":cpu");
 function showHint() {
@@ -412,7 +618,7 @@ const estTokens = s => {
 };
 
 // The messages the model sees: newest first until the budget is used up; failed turns left out.
-function contextFor(c) {
+function contextFor(c, budget = HISTORY_BUDGET) {
   const msgs = [];
   c.messages.forEach((m, i) => {
     if (m.error || (m.role === "user" && c.messages[i + 1]?.error)) return;
@@ -422,7 +628,7 @@ function contextFor(c) {
   let used = 0;
   for (let i = msgs.length - 1; i >= 0; i--) {
     used += estTokens(msgs[i].content);
-    if (used > HISTORY_BUDGET && out.length) break;
+    if (used > budget && out.length) break;
     out.unshift(msgs[i]);
   }
   while (out.length > 1 && out[0].role !== "user") out.shift();
@@ -481,6 +687,18 @@ function addMsg(m) {
       setTimeout(() => { copy.textContent = "Copy"; }, 1500);
     };
     meta.append(copy);
+    if (canSpeak) {
+      const talk = document.createElement("button");
+      talk.type = "button"; talk.textContent = "🔊 Listen";
+      talk.onclick = () => speak(m.content, talk);
+      meta.append(talk);
+    }
+    if (m.source) {
+      const a = document.createElement("a");
+      a.href = m.source.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.textContent = "📚 Wikipedia: " + m.source.title;
+      meta.append(a);
+    }
     if (m.note) { const n = document.createElement("span"); n.textContent = m.note; meta.append(n); }
     el.append(meta);
   }
@@ -510,8 +728,8 @@ function renderEmpty() {
   list.innerHTML = `<div class="empty"><img src="icon.svg" alt=""><h1>Hi, I'm Dido 👋</h1>
     <div>Free AI chat that runs privately on your device.</div><div class="suggest"></div></div>`;
   const box = list.querySelector(".suggest");
-  for (const q of ["Explain quantum computing simply", "Write a short poem about Chennai rain",
-                   "Help me plan a 3-day study schedule", "Write a Python function to reverse a string"]) {
+  for (const q of ["Who was A. P. J. Abdul Kalam?", "What is 18% of 2,450?",
+                   "Convert 5 km to miles", "Write a short poem about Chennai rain"]) {
     const b = document.createElement("button");
     b.className = "btn"; b.textContent = q;
     b.onclick = () => { $("input").value = q; send(); };
@@ -560,18 +778,35 @@ async function send() {
   c.messages.push({ role: "user", content: text });
   if (c.title === "New chat") c.title = text.replace(/\s+/g, " ").slice(0, 40);
   input.value = ""; autosize();
+  rememberFromMessage(text);
+
+  // Calculations, conversions and date/time get an exact answer instantly, without the AI.
+  const tool = toolAnswer(text);
+  if (tool) {
+    c.messages.push({ role: "assistant", content: tool.answer, note: tool.note });
+    save(); render();
+    return;
+  }
+
   busy = true; stopRequested = false; live = { chatId: c.id, text: "" };
   save(); render(); updateControls();
 
-  let reply = "", finish = null, error = null;
+  let reply = "", finish = null, error = null, ref = null;
   try {
+    const lookup = webBox.checked ? lookUp(text) : Promise.resolve(null);   // runs while the model loads
     const eng = await getEngine();
+    if (!stopRequested) {
+      status("Looking it up on Wikipedia…");
+      ref = await lookup;
+      status("");
+    }
     if (!stopRequested) {
       abortCtl = new AbortController();
       const model = MODELS.find(m => m.id === llmModel) || currentModel();
+      const extra = ref ? `Use this information from Wikipedia ("${ref.title}") to answer. Stick to these facts and say so if they don't answer the question:\n"""${ref.text}"""` : "";
       const stream = await eng.createChatCompletion({
         stream: true, max_tokens: MAX_REPLY, temperature: 0.7, top_p: 0.8, top_k: 20,
-        messages: [{ role: "system", content: SYSTEM }, ...contextFor(c)],
+        messages: [{ role: "system", content: systemPrompt(extra) }, ...contextFor(c, HISTORY_BUDGET - estTokens(extra))],
         abortSignal: abortCtl.signal,
         ...(model.qwen3 ? { chat_template_kwargs: { enable_thinking: false } } : {}),
       });
@@ -591,6 +826,7 @@ async function send() {
   reply = visible(reply).trimEnd();
 
   const msg = { role: "assistant", content: reply };
+  if (ref && reply) msg.source = { title: ref.title, url: ref.url };
   if (error && reply) msg.note = "Reply ended early.";   // keep the part that arrived
   else if (error) { msg.error = true; msg.content = "⚠️ " + error; }
   else if (stopRequested) {

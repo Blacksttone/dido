@@ -13,6 +13,15 @@ The AI runs on your own phone or computer, so your chats never leave your device
 Needs Android 7.0 or newer. A phone with 6 GB of RAM or more is best for the default model;
 on phones with less memory, choose **Qwen3 0.6B** in the menu (☰).
 
+## What Dido can do
+
+- **Chat** like ChatGPT, in English, Tamil or Tanglish, with its own friendly "Dido" personality
+- **Remembers you:** say "my name is …" (or fill in *What Dido should remember about you* in the menu)
+- **Looks things up:** factual questions are checked on Wikipedia (free, no key) and the answer shows the source link
+- **Exact tools, offline:** calculator (`18% of 2450`, `sqrt(144)+2^3`, `5 into 6`), unit conversions
+  (`5 km to miles`, `100 f to c`, `2 kg in pounds`) and date/time (`what time is it`, `inniku enna date`)
+- **Voice:** tap 🔊 Listen to hear any answer (uses the phone's own text-to-speech)
+
 ## Features
 
 - Several chats with history, saved only on your device

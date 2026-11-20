@@ -10,6 +10,8 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -27,7 +29,9 @@ import android.widget.FrameLayout;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -44,6 +48,9 @@ public class MainActivity extends Activity {
 
     private FrameLayout root;
     private WebView web;
+    private TextToSpeech tts;
+    private boolean ttsReady;
+    private String pendingText, pendingLang;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -155,6 +162,77 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Reads text aloud with the phone's own text-to-speech engine (WebView has no speech of its own). */
+    private void speakNow(String text, String lang) {
+        pendingText = text;
+        pendingLang = lang;
+        if (tts == null) {
+            tts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+                @Override
+                public void onInit(int status) {
+                    ttsReady = status == TextToSpeech.SUCCESS;
+                    if (!ttsReady) {
+                        speechDone();
+                        return;
+                    }
+                    tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                        @Override
+                        public void onStart(String id) {
+                        }
+
+                        @Override
+                        public void onDone(String id) {
+                            if ("dido-last".equals(id)) speechDone();
+                        }
+
+                        @Override
+                        public void onError(String id) {
+                            speechDone();
+                        }
+                    });
+                    flushSpeech();
+                }
+            });
+        } else if (ttsReady) {
+            flushSpeech();
+        }
+    }
+
+    private void flushSpeech() {
+        if (pendingText == null) return;
+        String text = pendingText;
+        String lang = pendingLang;
+        pendingText = null;
+        int result = tts.setLanguage(Locale.forLanguageTag(lang));
+        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            tts.setLanguage(Locale.getDefault());
+        }
+        tts.stop();
+        int max = Math.min(3900, TextToSpeech.getMaxSpeechInputLength());
+        List<String> parts = new ArrayList<String>();
+        while (text.length() > max) {
+            int cut = text.lastIndexOf(". ", max);
+            if (cut < max / 2) cut = max - 1;
+            parts.add(text.substring(0, cut + 1));
+            text = text.substring(cut + 1);
+        }
+        parts.add(text);
+        for (int i = 0; i < parts.size(); i++) {
+            String id = i == parts.size() - 1 ? "dido-last" : "dido-" + i;
+            tts.speak(parts.get(i), TextToSpeech.QUEUE_ADD, null, id);
+        }
+    }
+
+    /** Tells the page that reading aloud finished, so its button changes back to "Listen". */
+    private void speechDone() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (web != null) web.evaluateJavascript("window.didoSpeechDone && window.didoSpeechDone()", null);
+            }
+        });
+    }
+
     /** Helpers the page can call as window.DidoNative.*  */
     private class Bridge {
         @JavascriptInterface
@@ -164,6 +242,27 @@ public class MainActivity extends Activity {
                 public void run() {
                     ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                     if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("Dido", text));
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void speak(final String text, final String lang) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    speakNow(text, lang);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void stopSpeaking() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    pendingText = null;
+                    if (tts != null) tts.stop();
                 }
             });
         }
@@ -216,6 +315,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (tts != null) {
+            tts.shutdown();
+            tts = null;
+        }
         if (web != null) {
             root.removeView(web);
             web.destroy();
