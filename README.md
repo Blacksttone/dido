@@ -10,8 +10,8 @@ The AI runs on your own phone or computer, so your chats never leave your device
 3. Open Dido and send a message. The first message downloads the AI model once
    (about 1.1 GB, so use Wi-Fi). After that, Dido works without internet.
 
-Needs Android 7.0 or newer. A phone with 6 GB of RAM or more is best for the default model;
-on phones with less memory, choose **Qwen3 0.6B** in the menu (☰).
+Needs Android 7.0 or newer. On phones Dido starts with the light Qwen3 0.6B model and the CPU;
+phones with 8 GB+ RAM can pick Qwen3 1.7B in the menu (☰). Play Protect may warn about the APK because it is not from the Play Store: tap **Install anyway**.
 
 ## What Dido can do
 

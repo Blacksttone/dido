@@ -5,6 +5,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
@@ -29,6 +30,8 @@ import android.widget.FrameLayout;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -55,10 +58,30 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        rememberCrashes();
         styleSystemBars();
         root = new FrameLayout(this);
         setContentView(root);
         openWebView(HOME);
+    }
+
+    /** If the app crashes, keep the error so the page can show it next time (window.DidoNative.lastCrash()). */
+    private void rememberCrashes() {
+        final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+            @Override
+            public void uncaughtException(Thread thread, Throwable error) {
+                try {
+                    StringWriter trace = new StringWriter();
+                    error.printStackTrace(new PrintWriter(trace));
+                    String text = trace.toString();
+                    getSharedPreferences("dido", MODE_PRIVATE).edit()
+                            .putString("lastCrash", text.length() > 2000 ? text.substring(0, 2000) : text).commit();
+                } catch (Throwable ignored) {
+                }
+                if (previous != null) previous.uncaughtException(thread, error);
+            }
+        });
     }
 
     private boolean isNight() {
@@ -240,8 +263,11 @@ public class MainActivity extends Activity {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
+                    try {
                     ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                     if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("Dido", text));
+                    } catch (Throwable ignored) {
+                    }
                 }
             });
         }
@@ -251,7 +277,11 @@ public class MainActivity extends Activity {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    speakNow(text, lang);
+                    try {
+                        speakNow(text, lang);
+                    } catch (Throwable e) {
+                        speechDone();
+                    }
                 }
             });
         }
@@ -262,9 +292,21 @@ public class MainActivity extends Activity {
                 @Override
                 public void run() {
                     pendingText = null;
-                    if (tts != null) tts.stop();
+                    try {
+                        if (tts != null) tts.stop();
+                    } catch (Throwable ignored) {
+                    }
                 }
             });
+        }
+
+        /** Returns (once) the error that closed the app last time, or null. */
+        @JavascriptInterface
+        public String lastCrash() {
+            SharedPreferences prefs = getSharedPreferences("dido", MODE_PRIVATE);
+            String crash = prefs.getString("lastCrash", null);
+            prefs.edit().remove("lastCrash").apply();
+            return crash;
         }
 
         /** Keeps the screen on while a model downloads or a reply is being written. */

@@ -117,7 +117,7 @@
       <select id="model"></select>
       <div class="free" id="modelHint" style="margin-top:4px"></div>
     </div>
-    <label class="toggle"><input type="checkbox" id="gpu"> Use the GPU when possible (faster)</label>
+    <label class="toggle"><input type="checkbox" id="gpu"> <span id="gpuLabel">Use the GPU when possible (faster)</span></label>
     <label class="toggle"><input type="checkbox" id="web"> Look up facts on Wikipedia (needs internet)</label>
     <div>
       <label class="small" for="memory">What Dido should remember about you</label>
@@ -166,11 +166,11 @@ const MAX_REPLY = Math.round(N_CTX * 0.4);        // longest reply
 // Each model lists several download sources (Hugging Face repos); the first one that works is used.
 const MODELS = [
   { id: "qwen3-1.7b", name: "Qwen3 1.7B", label: "Qwen3 1.7B · 1.1 GB", qwen3: true,
-    hint: "Recommended. Good answers and understands Tamil.",
+    hint: "Smarter, understands Tamil. Best on phones with 8 GB+ RAM.",
     sources: [{ repo: "unsloth/Qwen3-1.7B-GGUF", quant: "Q4_K_M" }, { repo: "ggml-org/Qwen3-1.7B-GGUF", quant: "Q4_K_M" },
               { repo: "Qwen/Qwen3-1.7B-GGUF" }] },
   { id: "qwen3-0.6b", name: "Qwen3 0.6B", label: "Qwen3 0.6B · 0.4 GB", qwen3: true,
-    hint: "Fastest and smallest. Simpler answers.",
+    hint: "Fast and light. Works on most phones; simpler answers.",
     sources: [{ repo: "unsloth/Qwen3-0.6B-GGUF", quant: "Q4_K_M" }, { repo: "ggml-org/Qwen3-0.6B-GGUF", quant: "Q4_K_M" },
               { repo: "Qwen/Qwen3-0.6B-GGUF" }] },
   { id: "qwen2.5-1.5b", name: "Qwen 2.5 1.5B", label: "Qwen 2.5 1.5B · 1.1 GB",
@@ -221,9 +221,11 @@ const visible = t => t.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").replace(/^\s
 // ---------- settings ----------
 const modelSel = $("model"), gpuBox = $("gpu");
 for (const m of MODELS) modelSel.add(new Option(m.label, m.id));
-modelSel.value = store.get("dido.model", MODELS[0].id);
+modelSel.value = store.get("dido.model", isPhone ? "qwen3-0.6b" : MODELS[0].id);   // phones: the light model first
 if (!modelSel.value) modelSel.value = MODELS[0].id;
-gpuBox.checked = store.get("dido.gpu", true);
+const GPU_KEY = isApp ? "dido.gpu.app" : "dido.gpu";
+gpuBox.checked = store.get(GPU_KEY, !isApp);
+if (isApp) $("gpuLabel").textContent = "Use the phone GPU (experimental, may close the app)";
 const webBox = $("web"), memoryBox = $("memory");
 webBox.checked = store.get("dido.web", true);
 webBox.onchange = () => store.set("dido.web", webBox.checked);
@@ -425,7 +427,7 @@ modelSel.onchange = () => {
   preloadIfCached();
 };
 gpuBox.onchange = () => {
-  store.set("dido.gpu", gpuBox.checked);
+  store.set(GPU_KEY, gpuBox.checked);
   if (llm) status("This takes effect with your next message.");
   preloadIfCached();
 };
@@ -520,6 +522,7 @@ async function loadModel(model) {
       });
       w.setCompat(COMPAT);
       loadAbort = new AbortController();
+      store.set("dido.working", { phase: "load", model: model.id, mode, url });   // see recoverFromCrash()
       try {
         await w.loadModelFromUrl(url, {
           n_ctx: N_CTX, ...(mode === "cpu" ? { n_gpu_layers: 0 } : {}), signal: loadAbort.signal,
@@ -528,6 +531,7 @@ async function loadModel(model) {
             else status(`Starting ${model.name}…`);
           },
         });
+        store.del("dido.working");
         llm = w; llmModel = model.id; onGPU = mode === "gpu";
         store.set("dido.everLoaded", true);
         navigator.storage?.persist?.().catch(() => {});   // ask the browser to keep the saved model
@@ -535,11 +539,12 @@ async function loadModel(model) {
         return w;
       } catch (e) {
         lastErr = e;
+        store.del("dido.working");
         try { await w.exit(); } catch {}
         if (isAbort(e) || isNetErr(e) || /quota|storage/i.test(String(e?.message || e))) break;
         if (mode === "gpu") {   // the GPU didn't work on this device: use the CPU from now on
           console.warn("GPU load failed, using the CPU", e);
-          gpuBox.checked = false; store.set("dido.gpu", false);
+          gpuBox.checked = false; store.set(GPU_KEY, false);
           engineKey = wantedKey();   // this load now stands for the CPU setting
         }
       } finally { loadAbort = null; }
@@ -804,6 +809,7 @@ async function send() {
       abortCtl = new AbortController();
       const model = MODELS.find(m => m.id === llmModel) || currentModel();
       const extra = ref ? `Use this information from Wikipedia ("${ref.title}") to answer. Stick to these facts and say so if they don't answer the question:\n"""${ref.text}"""` : "";
+      store.set("dido.working", { phase: "reply", model: llmModel, mode: onGPU ? "gpu" : "cpu" });
       const stream = await eng.createChatCompletion({
         stream: true, max_tokens: MAX_REPLY, temperature: 0.7, top_p: 0.8, top_k: 20,
         messages: [{ role: "system", content: systemPrompt(extra) }, ...contextFor(c, HISTORY_BUDGET - estTokens(extra))],
@@ -822,6 +828,7 @@ async function send() {
     if (!isAbort(err)) { console.error(err); error = friendlyError(err); }
   }
   abortCtl = null;
+  store.del("dido.working");
   status("");
   reply = visible(reply).trimEnd();
 
@@ -876,12 +883,35 @@ $("clearModels").onclick = async () => {
   } catch (e) { status("Couldn't delete the models: " + (e.message || e)); }
 };
 
-if (/[?&]restarted=1/.test(location.search))
-  status("Dido restarted because the phone ran low on memory. If this keeps happening, pick Qwen3 0.6B in the menu.");
+// If Dido was closed (or its page killed) while starting or running the AI, make the next try safer.
+async function recoverFromCrash() {
+  const w = store.get("dido.working", null);
+  let note = null;
+  try { const c = window.DidoNative?.lastCrash?.(); if (c) note = "Dido closed last time because of an error: " + c.split("\n")[0]; } catch {}
+  if (!w) return note;
+  store.del("dido.working");
+  if (w.phase === "load" && w.url && !(await loadLib().then(() => isCached(w.url)).catch(() => false)))
+    return note;   // closed during the download, not a crash
+  if (w.mode === "gpu") {
+    gpuBox.checked = false; store.set(GPU_KEY, false);
+    return "Dido closed while using the GPU, so it now uses the CPU (safer). You can turn the GPU back on in the menu.";
+  }
+  if (w.model !== "qwen3-0.6b") {
+    modelSel.value = "qwen3-0.6b"; store.set("dido.model", modelSel.value);
+    return "Dido closed because the phone ran out of memory, so it switched to the lighter Qwen3 0.6B model.";
+  }
+  return "Dido closed because the phone ran out of memory. Close other apps and try again.";
+}
+
 render();
 showHint();
 updateControls();
-preloadIfCached();
+recoverFromCrash().then(note => {
+  if (!note && /[?&]restarted=1/.test(location.search))
+    note = "Dido restarted because the phone ran low on memory. If this keeps happening, pick Qwen3 0.6B in the menu.";
+  showHint();
+  if (note) status(note); else preloadIfCached();
+});
 </script>
 </body>
 </html>

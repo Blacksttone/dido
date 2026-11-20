@@ -8,8 +8,8 @@
 # Keep that key: Android only installs a new Dido over an old one when both are signed with the same key.
 set -euo pipefail
 
-VERSION_CODE=2
-VERSION_NAME=1.1
+VERSION_CODE=3
+VERSION_NAME=1.2
 MIN_SDK=24      # Android 7.0
 TARGET_SDK=34   # Android 14
 
